@@ -1,0 +1,75 @@
+# ──────────────────────────────────────────────────────────────
+# XAUUSD SMC / ORB Analysis Tool — Configuration
+# ──────────────────────────────────────────────────────────────
+
+# MetaTrader 5 connection
+mt5:
+  symbol: "XAUUSD"
+  # If your broker names it differently (e.g., "XAUUSDm", "Gold"), change here
+  timeframe: "M1"
+  login: 109042663
+  password: "5_JsAvDj"
+  server: "MetaQuotes-Demo"
+  path: "C:\\Program Files\\MetaTrader 5\\terminal64.exe"
+
+# Live polling settings
+polling:
+  interval_seconds: 1        # How often to pull the latest bar
+  buffer_size: 5000           # Max bars held in the in-memory DataFrame
+
+# Trading sessions (all times in UTC, 24-hour format "HH:MM")
+sessions:
+  asian:
+    name: "Asian"
+    start: "00:00"
+    end: "06:00"
+    or_minutes: 30            # Opening range = first N minutes of session
+  london:
+    name: "London"
+    start: "07:00"
+    end: "09:00"
+    or_minutes: 30
+  new_york:
+    name: "New York"
+    start: "12:00"
+    end: "16:00"
+    or_minutes: 30
+
+# Smart Money Concepts parameters
+smc:
+  swing_lookback: 5           # Bars each side for fractal swing detection
+  ob_lookback: 10             # Max bars to look back for the opposing candle (order blocks)
+  fvg_min_gap_pips: 1.0       # Minimum gap size in pips to qualify as FVG
+  liquidity_reversal_bars: 3  # Bars after sweep to confirm reversal
+  pip_size: 0.01              # XAUUSD: 1 pip = $0.01
+
+# Confluence signal rules — weight each factor for scoring
+signals:
+  min_score: 3.0              # Minimum total score to flag a signal
+  rules:
+    orb_aligned_with_bias:
+      weight: 2.0
+      description: "ORB breakout direction matches SMC structural bias"
+    unmitigated_ob:
+      weight: 1.5
+      description: "Unmitigated order block supports breakout direction"
+    fvg_confluence:
+      weight: 1.0
+      description: "Unmitigated FVG aligns with breakout"
+    liquidity_sweep_before:
+      weight: 1.5
+      description: "Liquidity sweep on opposite side precedes breakout"
+    retest_confirmed:
+      weight: 1.0
+      description: "ORB retest confirmed after initial breakout"
+
+# Backtest settings
+backtest:
+  start_date: "2026-05-08"
+  end_date: "2026-06-08"
+  trade_outcomes_csv: null    # Optional: path to CSV with [entry_time, exit_time, direction, pnl]
+
+# Dashboard settings
+dashboard:
+  refresh_minutes: 30         # Auto-refresh interval for live mode
+  chart_bars: 500             # Number of bars to display on chart
