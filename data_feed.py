@@ -602,3 +602,33 @@ class MT5DataFeed:
         if dt.tzinfo is None:
             return dt.replace(tzinfo=timezone.utc)
         return dt.astimezone(timezone.utc)
+
+    def fetch_adr(self, days: int = 5) -> float:
+        """
+        Fetch the Average Daily Range (ADR) of the last N days.
+        If MT5 is unavailable, calculates it from the shifted fallback CSV dataset.
+        """
+        if not MT5_AVAILABLE:
+            if hasattr(self, "_fallback_df") and not self._fallback_df.empty:
+                try:
+                    daily_df = self._fallback_df.resample("D").agg({"high": "max", "low": "min"}).dropna()
+                    ranges = daily_df["high"] - daily_df["low"]
+                    if not ranges.empty:
+                        return float(ranges.tail(days).mean())
+                except Exception as e:
+                    logger.error(f"Failed to calculate fallback ADR: {e}")
+            return 30.0 # Default fallback: $30 USD range for Gold
+
+        try:
+            import MetaTrader5 as mt5_lib
+            end_dt = datetime.now(timezone.utc)
+            start_dt = end_dt - timedelta(days=days * 2) # Get extra padding days to handle weekends
+            d1_df = self.fetch_historical_bars(start_dt, end_dt, timeframe=mt5_lib.TIMEFRAME_D1)
+            if not d1_df.empty:
+                ranges = d1_df["high"] - d1_df["low"]
+                if not ranges.empty:
+                    return float(ranges.tail(days).mean())
+        except Exception as e:
+            logger.error(f"Failed to fetch daily ADR: {e}")
+            
+        return 30.0

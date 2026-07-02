@@ -686,7 +686,8 @@ def infer_bias(
 
 def analyze_structure(
     df: pd.DataFrame,
-    config: dict
+    config: dict,
+    is_macro: bool = False
 ) -> dict:
     """
     Run the complete SMC analysis pipeline on a DataFrame.
@@ -694,11 +695,28 @@ def analyze_structure(
     Args:
         df: DataFrame with OHLC columns and UTC DatetimeIndex.
         config: The 'smc' section of the YAML config.
+        is_macro: True if this is the macro-timeframe recursive call.
 
     Returns:
         Dict with all SMC analysis results.
     """
     smc_cfg = config if "swing_lookback" in config else config.get("smc", config)
+
+    # 1. Macro trend bias calculation (M30)
+    macro_bias = "neutral"
+    if not is_macro:
+        df_m30_full = df.resample("30min").agg({
+            "open": "first",
+            "high": "max",
+            "low": "min",
+            "close": "last"
+        }).dropna()
+        if len(df_m30_full) >= 15:
+            try:
+                macro_result = analyze_structure(df_m30_full, config, is_macro=True)
+                macro_bias = macro_result.get("bias", "neutral")
+            except Exception as e:
+                logger.error(f"Macro trend analysis failed: {e}")
 
     lookback = smc_cfg.get("swing_lookback", 5)
     ob_lookback = smc_cfg.get("ob_lookback", 10)
@@ -751,5 +769,6 @@ def analyze_structure(
         "fvgs": fvgs,
         "sweeps": sweeps,
         "bias": bias,
+        "macro_bias": macro_bias,
         "swing_df": swing_df,
     }

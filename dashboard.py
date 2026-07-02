@@ -402,9 +402,32 @@ def render_main_dashboard(
         st.metric("Signals", len(signals))
 
 
-def render_session_details(orb_results: list[ORBResult], latest_bar_time: datetime, sessions: list[SessionConfig]):
+def render_session_details(orb_results: list[ORBResult], latest_bar_time: datetime, sessions: list[SessionConfig], adr: Optional[float] = None):
     """Render a premium grid card layout for session ORB details with clear progress tracking."""
     st.markdown("## 📋 Session ORB Details")
+    
+    if adr is not None:
+        highs = [orb.range_high for orb in orb_results if orb.range_high is not None]
+        lows = [orb.range_low for orb in orb_results if orb.range_low is not None]
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("5-Day ADR", f"${adr:.2f}")
+        if highs and lows:
+            today_high = max(highs)
+            today_low = min(lows)
+            today_range = today_high - today_low
+            adr_pct = (today_range / adr) * 100.0
+            with col2:
+                st.metric("Today's Session Range", f"${today_range:.2f}")
+            with col3:
+                st.metric("ADR Coverage", f"{adr_pct:.1f}%")
+        else:
+            with col2:
+                st.metric("Today's Session Range", "N/A")
+            with col3:
+                st.metric("ADR Coverage", "0.0%")
+        st.divider()
     
     if not orb_results:
         st.info("No session details available for this day/range.")
@@ -622,6 +645,38 @@ def render_signals_page(signals: list[Signal], smc_result: dict, config: dict):
         st.metric("Average Score", f"{avg_score:.2f}")
         
     st.divider()
+
+    # ── High-Impact USD News Calendar ──
+    news_enabled = config.get("signals", {}).get("news_filter_enabled", True)
+    news_events = st.session_state.get("news_events", [])
+    
+    if news_enabled:
+        with st.expander("📅 High-Impact USD News Calendar (This Week)", expanded=False):
+            if news_events:
+                news_html = """
+                <table style="width: 100%; border-collapse: collapse; font-family: 'Outfit', sans-serif; font-size: 0.9rem;">
+                    <thead>
+                        <tr style="border-bottom: 2px solid #2d3748; text-align: left; color: #a0aec0;">
+                            <th style="padding: 8px;">Event Title</th>
+                            <th style="padding: 8px;">Release Time (UTC)</th>
+                            <th style="padding: 8px;">Impact</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                """
+                for event in news_events:
+                    news_html += f"""
+                        <tr style="border-bottom: 1px solid #2d3748; color: #e2e8f0;">
+                            <td style="padding: 8px; font-weight: 600;">{event['title']}</td>
+                            <td style="padding: 8px;">{event['time'].strftime('%Y-%m-%d %H:%M')}</td>
+                            <td style="padding: 8px;"><span style="background-color: rgba(239, 83, 80, 0.2); color: #ef5350; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; font-weight: 600;">HIGH</span></td>
+                        </tr>
+                    """
+                news_html += "</tbody></table>"
+                st.markdown("".join([line.strip() for line in news_html.split("\n")]), unsafe_allow_html=True)
+            else:
+                st.info("No high-impact USD news releases scheduled for this week (or calendar offline).")
+        st.divider()
     
     # Signal Breakdown Cards
     st.write("### 🚨 Active Signals Breakdown")
@@ -640,6 +695,7 @@ def render_signals_page(signals: list[Signal], smc_result: dict, config: dict):
         
         score_pct = sig.score_pct
         score_color = "#26a69a" if sig.direction == "bullish" else "#ef5350"
+        time_str = sig.timestamp.strftime('%Y-%m-%d %H:%M') if sig.timestamp else 'N/A'
         
         card_html = f"""
         <div class="signal-card {direction_class}">
@@ -651,9 +707,26 @@ def render_signals_page(signals: list[Signal], smc_result: dict, config: dict):
                     Score: {sig.total_score:.1f} / {sig.max_possible_score:.1f} ({sig.score_pct:.0%})
                 </span>
             </div>
-            <div style="font-size: 0.9rem; color: #a0aec0; margin-bottom: 12px;">
-                Signal Time: <b>{sig.timestamp}</b>
+            <div style="font-size: 0.9rem; color: #a0aec0; margin-bottom: 12px; display: flex; gap: 20px;">
+                <span>Signal Time: <b>{time_str} UTC</b></span>
+                <span>Entry: <b>{sig.details.get('entry_price', 'N/A')}</b></span>
             </div>
+            
+            <div style="display: flex; gap: 15px; margin-bottom: 15px; background: rgba(0,0,0,0.25); padding: 10px 15px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05);">
+                <div style="flex: 1;">
+                    <span style="display: block; font-size: 0.7rem; color: #a0aec0; text-transform: uppercase; font-weight: 600; margin-bottom: 3px;">Stop Loss (SL)</span>
+                    <b style="font-size: 1.15rem; color: #f28b82;">{sig.sl}</b>
+                </div>
+                <div style="flex: 1;">
+                    <span style="display: block; font-size: 0.7rem; color: #a0aec0; text-transform: uppercase; font-weight: 600; margin-bottom: 3px;">Take Profit (TP)</span>
+                    <b style="font-size: 1.15rem; color: #81c784;">{sig.tp}</b>
+                </div>
+                <div style="flex: 1;">
+                    <span style="display: block; font-size: 0.7rem; color: #a0aec0; text-transform: uppercase; font-weight: 600; margin-bottom: 3px;">R:R Ratio</span>
+                    <b style="font-size: 1.15rem; color: #64b5f6;">{sig.rr_ratio}:1</b>
+                </div>
+            </div>
+            
             <div style="margin-bottom: 15px;">
                 <div style="background-color: rgba(255, 255, 255, 0.1); height: 8px; border-radius: 4px; overflow: hidden;">
                     <div style="background-color: {score_color}; width: {score_pct * 100}%; height: 100%;"></div>
@@ -913,7 +986,22 @@ def main():
     orb_results = analyze_all_sessions(df, sessions, selected_date, pip_size=pip_size)
 
     rules = load_rules(config)
-    signals = generate_signals(orb_results, smc_result, rules, min_score)
+    
+    # Fetch ADR and USD News Events
+    adr = feed.fetch_adr(days=5)
+    from utils import fetch_high_impact_news
+    if "news_events" not in st.session_state:
+        st.session_state.news_events = fetch_high_impact_news()
+        
+    signals = generate_signals(
+        orb_results,
+        smc_result,
+        rules,
+        min_score,
+        config=config,
+        adr=adr,
+        news_events=st.session_state.news_events
+    )
 
     # ── Route Pages ──
     if page == "📈 Main Dashboard":
@@ -923,7 +1011,7 @@ def main():
     elif page == "🔔 Trading Signals":
         render_signals_page(signals, smc_result, config)
     elif page == "📋 Session Details":
-        render_session_details(orb_results, df.index[-1], sessions)
+        render_session_details(orb_results, df.index[-1], sessions, adr=adr)
 
     # ── Auto-Refresh (Live Mode Only) ──
     if mode == "Live":

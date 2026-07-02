@@ -46,10 +46,17 @@ smc:
 # Confluence signal rules — weight each factor for scoring
 signals:
   min_score: 3.0              # Minimum total score to flag a signal
+  trigger_window_minutes: 90  # Max mins after session start to trigger breakout
+  adr_filter_pct: 80.0        # Skip signals if today's range exceeds 80% of 5-day ADR
+  news_filter_enabled: true   # Block signals around high-impact USD events
+  news_buffer_minutes: 30     # Minutes before and after news to block trades
   rules:
     orb_aligned_with_bias:
-      weight: 2.0
-      description: "ORB breakout direction matches SMC structural bias"
+      weight: 1.0
+      description: "ORB breakout direction matches M1 structural bias"
+    macro_trend_aligned:
+      weight: 1.5
+      description: "ORB breakout direction matches M30 macro trend bias"
     unmitigated_ob:
       weight: 1.5
       description: "Unmitigated order block supports breakout direction"

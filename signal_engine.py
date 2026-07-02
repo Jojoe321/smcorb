@@ -41,6 +41,9 @@ class Signal:
     rules_missed: list[str]
     details: dict
     timestamp: Optional[datetime] = None
+    sl: Optional[float] = None
+    tp: Optional[float] = None
+    rr_ratio: Optional[float] = None
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -106,8 +109,16 @@ def _rule_retest_confirmed(orb_result, smc_result) -> bool:
     return orb_result.retest_confirmed
 
 
+def _rule_macro_trend_aligned(orb_result, smc_result) -> bool:
+    """ORB breakout direction matches the M30 macro trend bias."""
+    if orb_result.breakout_direction is None:
+        return False
+    return orb_result.breakout_direction == smc_result.get("macro_bias")
+
+
 _DEFAULT_RULE_FNS = {
     "orb_aligned_with_bias": _rule_orb_aligned_with_bias,
+    "macro_trend_aligned": _rule_macro_trend_aligned,
     "unmitigated_ob": _rule_unmitigated_ob,
     "fvg_confluence": _rule_fvg_confluence,
     "liquidity_sweep_before": _rule_liquidity_sweep_before,
@@ -150,11 +161,55 @@ def evaluate_confluence(
     orb_result,
     smc_result: dict,
     rules: list[ConfluenceRule],
-    min_score: float = 3.0
+    min_score: float = 3.0,
+    config: Optional[dict] = None,
+    adr: Optional[float] = None,
+    news_events: Optional[list[dict]] = None
 ) -> Optional[Signal]:
     """Score a single ORB result against SMC analysis using confluence rules."""
     if orb_result.breakout_direction is None:
         return None
+
+    # Load configuration settings if available
+    sig_cfg = config.get("signals", {}) if config else {}
+    from datetime import timedelta
+
+    # ── Time-of-day execution filter ──
+    trigger_window = sig_cfg.get("trigger_window_minutes", 90)
+    if orb_result.breakout_time and orb_result.range_close_time:
+        session_start = orb_result.range_close_time - timedelta(minutes=30)
+        breakout_delay = (orb_result.breakout_time - session_start).total_seconds() / 60.0
+        if breakout_delay > trigger_window:
+            logger.info(
+                f"[{orb_result.session_name}] Breakout at {orb_result.breakout_time.strftime('%H:%M')} "
+                f"({breakout_delay:.1f}m delay) is outside trigger window of {trigger_window}m. Signal blocked."
+            )
+            return None
+
+    # ── ADR filter ──
+    adr_filter_pct = sig_cfg.get("adr_filter_pct", 80.0)
+    if adr is not None and orb_result.range_high is not None and orb_result.range_low is not None:
+        today_range = float(orb_result.range_high - orb_result.range_low)
+        adr_limit = adr * (adr_filter_pct / 100.0)
+        if today_range > adr_limit:
+            logger.info(
+                f"[{orb_result.session_name}] Session range ({today_range:.2f}) exceeds ADR limit of "
+                f"{adr_limit:.2f} ({adr_filter_pct}% of {adr:.2f} ADR). Signal blocked."
+            )
+            return None
+
+    # ── Economic News filter ──
+    if sig_cfg.get("news_filter_enabled", True) and news_events and orb_result.breakout_time:
+        buffer_mins = sig_cfg.get("news_buffer_minutes", 30)
+        for event in news_events:
+            event_time = event["time"]
+            time_diff = abs((orb_result.breakout_time - event_time).total_seconds()) / 60.0
+            if time_diff <= buffer_mins:
+                logger.info(
+                    f"[{orb_result.session_name}] Breakout at {orb_result.breakout_time.strftime('%H:%M')} "
+                    f"is within {buffer_mins}m of news event '{event['title']}' at {event_time.strftime('%H:%M')}. Signal blocked."
+                )
+                return None
 
     total_score = 0.0
     max_score = sum(r.weight for r in rules)
@@ -204,6 +259,44 @@ def evaluate_confluence(
         )
         return None
 
+    # Calculate Dynamic Stop Loss & Take Profit Levels
+    entry = float(orb_result.breakout_price)
+    sl = 0.0
+    tp = 0.0
+    
+    if orb_result.breakout_direction == "bullish":
+        sl = float(orb_result.range_low) if orb_result.range_low is not None else entry * 0.99
+        targets = []
+        for ob in smc_result.get("order_blocks", []):
+            if not ob["mitigated"] and ob["direction"] == "bearish" and ob["top"] > entry:
+                targets.append(ob["top"])
+        for fvg in smc_result.get("fvgs", []):
+            if not fvg["mitigated"] and fvg["direction"] == "bearish" and fvg["bottom"] > entry:
+                targets.append(fvg["bottom"])
+        if targets:
+            tp = float(min(targets))
+        else:
+            tp = entry + 2.0 * (entry - sl)
+    else:
+        sl = float(orb_result.range_high) if orb_result.range_high is not None else entry * 1.01
+        targets = []
+        for ob in smc_result.get("order_blocks", []):
+            if not ob["mitigated"] and ob["direction"] == "bullish" and ob["bottom"] < entry:
+                targets.append(ob["bottom"])
+        for fvg in smc_result.get("fvgs", []):
+            if not fvg["mitigated"] and fvg["direction"] == "bullish" and fvg["top"] < entry:
+                targets.append(fvg["top"])
+        if targets:
+            tp = float(max(targets))
+        else:
+            tp = entry - 2.0 * (sl - entry)
+            
+    risk = abs(entry - sl)
+    reward = abs(tp - entry)
+    rr_ratio = round(reward / risk, 2) if risk > 0 else 0.0
+
+    details["entry_price"] = round(entry, 2)
+
     signal = Signal(
         session_name=orb_result.session_name,
         date=orb_result.date,
@@ -215,9 +308,12 @@ def evaluate_confluence(
         rules_missed=missed,
         details=details,
         timestamp=orb_result.breakout_time,
+        sl=round(sl, 2),
+        tp=round(tp, 2),
+        rr_ratio=rr_ratio,
     )
 
-    logger.info(f"Signal generated: {signal.description}")
+    logger.info(f"Signal generated: {signal.description} | SL: {signal.sl} | TP: {signal.tp} (R:R: {signal.rr_ratio})")
     return signal
 
 
@@ -225,12 +321,15 @@ def generate_signals(
     orb_results: list,
     smc_result: dict,
     rules: list[ConfluenceRule],
-    min_score: float = 3.0
+    min_score: float = 3.0,
+    config: Optional[dict] = None,
+    adr: Optional[float] = None,
+    news_events: Optional[list[dict]] = None
 ) -> list[Signal]:
     """Generate signals for all ORB results against the SMC analysis."""
     signals = []
     for orb in orb_results:
-        signal = evaluate_confluence(orb, smc_result, rules, min_score)
+        signal = evaluate_confluence(orb, smc_result, rules, min_score, config, adr, news_events)
         if signal is not None:
             signals.append(signal)
 

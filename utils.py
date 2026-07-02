@@ -203,3 +203,64 @@ def setup_logging(level: str = "INFO") -> logging.Logger:
     logger.addHandler(handler)
 
     return logger
+
+
+def fetch_high_impact_news() -> list[dict]:
+    """
+    Fetch high-impact USD economic events from Forex Factory's weekly XML calendar feed.
+    Converts EST/EDT news release times to true UTC datetimes.
+    """
+    import urllib.request
+    import xml.etree.ElementTree as ET
+    from datetime import datetime, timezone, timedelta
+
+    url = "https://nfs.forexfactory.com/ff_calendar_thisweek.xml"
+    req = urllib.request.Request(url)
+    req.add_header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+    
+    events = []
+    try:
+        with urllib.request.urlopen(req, timeout=5) as response:
+            xml_data = response.read()
+            root = ET.fromstring(xml_data)
+            for event in root.findall("event"):
+                country_node = event.find("country")
+                impact_node = event.find("impact")
+                if country_node is None or impact_node is None:
+                    continue
+                
+                country = country_node.text
+                impact = impact_node.text
+                
+                # We only care about high-impact USD events
+                if country != "USD" or impact != "High":
+                    continue
+                    
+                title = event.find("title").text if event.find("title") is not None else "USD News Event"
+                date_str = event.find("date").text
+                time_str = event.find("time").text
+                
+                if time_str == "All Day" or not date_str or not time_str:
+                    continue
+                    
+                # Parse date and time in Eastern Time
+                try:
+                    dt_str = f"{date_str} {time_str}"
+                    est_dt = datetime.strptime(dt_str, "%m-%d-%Y %I:%M%p")
+                    
+                    # Convert Eastern Time to UTC (Daylight Savings simple approximation)
+                    is_dst = 3 < est_dt.month < 11
+                    offset_hours = 4 if is_dst else 5
+                    utc_dt = est_dt.replace(tzinfo=timezone.utc) + timedelta(hours=offset_hours)
+                    
+                    events.append({
+                        "title": title,
+                        "time": utc_dt,
+                        "impact": impact
+                    })
+                except Exception:
+                    continue
+    except Exception:
+        pass
+        
+    return events
