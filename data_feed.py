@@ -126,6 +126,29 @@ class MT5DataFeed:
         if self._mt5_server:
             init_kwargs["server"] = self._mt5_server
 
+        if not MT5_AVAILABLE:
+            logger.warning("MT5 client not supported on this platform. Operating in CSV Demo Fallback mode.")
+            # Load CSV file and shift it dynamically so its last bar matches now_time
+            try:
+                import os
+                csv_filename = "XAUUSD_M1.csv"
+                if os.path.exists(csv_filename):
+                    df = pd.read_csv(csv_filename, index_col="time", parse_dates=True)
+                    if not df.empty:
+                        last_time = df.index[-1]
+                        now_time = datetime.now(timezone.utc)
+                        time_diff = now_time - last_time
+                        df.index = df.index + time_diff
+                    self._fallback_df = df
+                    logger.info(f"Loaded and shifted {len(self._fallback_df)} bars from XAUUSD_M1.csv.")
+                else:
+                    logger.error(f"Fallback CSV '{csv_filename}' not found.")
+                    self._fallback_df = pd.DataFrame()
+            except Exception as e:
+                logger.error(f"Fallback CSV load/shift failed: {e}")
+                self._fallback_df = pd.DataFrame()
+            return
+
         if not mt5.initialize(**init_kwargs):
             error = mt5.last_error()
             raise RuntimeError(
@@ -263,6 +286,26 @@ class MT5DataFeed:
             f"(TF={timeframe})"
         )
 
+        if not MT5_AVAILABLE:
+            if not hasattr(self, "_fallback_df") or self._fallback_df.empty:
+                try:
+                    import os
+                    csv_filename = "XAUUSD_M1.csv"
+                    if os.path.exists(csv_filename):
+                        df = pd.read_csv(csv_filename, index_col="time", parse_dates=True)
+                        if not df.empty:
+                            last_time = df.index[-1]
+                            now_time = datetime.now(timezone.utc)
+                            time_diff = now_time - last_time
+                            df.index = df.index + time_diff
+                        self._fallback_df = df
+                    else:
+                        self._fallback_df = pd.DataFrame()
+                except Exception as e:
+                    raise RuntimeError(f"MT5 not available and local CSV demo cache load failed: {e}")
+            mask = (self._fallback_df.index >= start_dt) & (self._fallback_df.index <= end_dt)
+            return self._fallback_df.loc[mask].copy()
+
         # Convert UTC query datetimes to broker server timezone timestamps
         start_ts = int((start_dt + pd.Timedelta(seconds=self._offset_seconds)).timestamp())
         end_ts = int((end_dt + pd.Timedelta(seconds=self._offset_seconds)).timestamp())
@@ -318,6 +361,9 @@ class MT5DataFeed:
         end_dt = self._parse_datetime(end)
 
         logger.info(f"Fetching {self.symbol} ticks: {start_dt} --> {end_dt}")
+
+        if not MT5_AVAILABLE:
+            return None
 
         # Convert UTC query datetimes to broker server timezone timestamps
         start_ts = int((start_dt + pd.Timedelta(seconds=self._offset_seconds)).timestamp())
@@ -450,6 +496,17 @@ class MT5DataFeed:
           4. Calls the optional callback with the updated buffer
         """
         while not self._stop_event.is_set():
+            if not MT5_AVAILABLE:
+                # In CSV fallback mode, simply invoke the callback periodically
+                if callback is not None:
+                    try:
+                        with self._lock:
+                            callback(self._buffer.copy() if self._buffer is not None else pd.DataFrame())
+                    except Exception as e:
+                        logger.error(f"Polling callback error: {e}")
+                self._stop_event.wait(timeout=self.poll_interval)
+                continue
+
             try:
                 # Fetch the 2 most recent bars (current forming + last completed)
                 rates = mt5.copy_rates_from_pos(

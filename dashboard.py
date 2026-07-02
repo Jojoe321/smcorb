@@ -805,6 +805,10 @@ def main():
     with st.sidebar:
         st.title("⚙️ Controls")
 
+        from data_feed import MT5_AVAILABLE
+        if not MT5_AVAILABLE:
+            st.info("💡 Operating in **Live Demo Mode** (MT5 connection is simulated).")
+
         # Sidebar navigation
         st.subheader("Navigation")
         page = st.radio("Go to", ["📈 Main Dashboard", "🔍 FVG Analysis", "🔔 Trading Signals", "📋 Session Details"])
