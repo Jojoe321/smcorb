@@ -16,7 +16,27 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 
-import MetaTrader5 as mt5
+try:
+    import MetaTrader5 as mt5
+    MT5_AVAILABLE = True
+except ImportError:
+    # Create a mock mt5 object so the code doesn't fail on import on Linux (Streamlit Cloud)
+    class MockMT5:
+        TIMEFRAME_M1 = 1
+        TIMEFRAME_M30 = 30
+        COPY_TICKS_ALL = 1
+        def initialize(self, *args, **kwargs): return False
+        def login(self, *args, **kwargs): return False
+        def shutdown(self): pass
+        def last_error(self): return (-10001, "MetaTrader5 is not installed or not supported on this platform.")
+        def copy_rates_range(self, *args, **kwargs): return None
+        def copy_ticks_range(self, *args, **kwargs): return None
+        def copy_rates_from_pos(self, *args, **kwargs): return None
+        def symbol_info_tick(self, *args, **kwargs): return None
+        def symbol_info(self, symbol): return None
+        def symbol_select(self, symbol, visible): return False
+    mt5 = MockMT5()
+    MT5_AVAILABLE = False
 import numpy as np
 import pandas as pd
 
